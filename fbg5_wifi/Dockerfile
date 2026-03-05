@@ -9,4 +9,4 @@ COPY run.sh /app/run.sh
 
 RUN chmod +x /app/run.sh
 
-CMD ["sh /app/run.sh"]
+CMD ["ls /; ls /app; sh /app/run.sh"]
