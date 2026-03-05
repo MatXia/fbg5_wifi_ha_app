@@ -29,16 +29,15 @@ logger.info(f"Запуск с параметрами: PRINTER_IP={PRINTER_IP}, W
             f"MQTT_HOST={MQTT_HOST}, MQTT_PORT={MQTT_PORT}, "
             f"MQTT_USER={'задан' if MQTT_USER else 'не задан'}, INTERVAL={INTERVAL}")
 
-# Колбэки MQTT
+# Колбэки MQTT (версия 2.0+)
 def on_connect(client, userdata, flags, reason_code, properties=None):
     if reason_code == 0:
         logger.info("MQTT брокер: подключено успешно")
-        # Отправляем discovery при первом подключении
         discovery()
     else:
         logger.error(f"MQTT брокер: ошибка подключения, код {reason_code} - {mqtt.connack_string(reason_code)}")
 
-def on_disconnect(client, userdata, reason_code, properties=None):
+def on_disconnect(client, userdata, flags, reason_code, properties=None):
     logger.warning(f"MQTT брокер: отключено, код {reason_code}. Попытка переподключения...")
 
 # Создание клиента MQTT
@@ -48,7 +47,6 @@ try:
     mqtt_client.on_disconnect = on_disconnect
     mqtt_client.reconnect_delay_set(min_delay=1, max_delay=60)
 
-    # Если заданы логин и пароль, устанавливаем их
     if MQTT_USER and MQTT_PASSWORD:
         mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
         logger.info("Установлены учётные данные для MQTT")
@@ -71,13 +69,19 @@ device = {
 }
 
 def publish(topic, value):
-    """Публикация в MQTT с проверкой соединения."""
+    """Публикация в MQTT с проверкой соединения и логированием."""
+    # Проверяем, что value не пустое и не None
+    if value is None or value == "":
+        logger.warning(f"Попытка публикации пустого значения в {topic}, пропускаю")
+        return
+    # Проверяем состояние MQTT
     if not mqtt_client.is_connected():
         logger.warning(f"MQTT не подключён, попытка переподключения перед публикацией {topic}")
+        # Даём время на переподключение (loop_start работает в фоне)
         time.sleep(0.5)
-    result = mqtt_client.publish(topic, value, retain=True)
+    result = mqtt_client.publish(topic, str(value), retain=True)
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
-        logger.debug(f"Успешно опубликовано: {topic} = {value}")
+        logger.info(f"Опубликовано: {topic} = {value}")
     else:
         logger.warning(f"Ошибка публикации в топик {topic}: {result.rc}")
 
@@ -140,50 +144,60 @@ def printer_reachable():
         return False
 
 def parse_line(line):
-    """Парсинг строки от принтера."""
+    """Парсинг строки от принтера и публикация данных."""
     logger.debug(f"Парсинг строки: {line}")
     try:
+        # Пример: T:23 B:21 / или T:23
         if line.startswith("T:"):
-            nozzle = re.search(r"T:(\d+)", line)
-            bed = re.search(r"B:(\d+)", line)
-            if nozzle:
-                value = nozzle.group(1)
+            nozzle_match = re.search(r"T:(\d+)", line)
+            bed_match = re.search(r"B:(\d+)", line)
+            if nozzle_match:
+                value = nozzle_match.group(1)
+                logger.info(f"Извлечена температура сопла: {value}")
                 publish("fbg5/nozzle_temp", value)
-                logger.info(f"Температура сопла: {value}")
-            if bed:
-                value = bed.group(1)
+            if bed_match:
+                value = bed_match.group(1)
+                logger.info(f"Извлечена температура стола: {value}")
                 publish("fbg5/bed_temp", value)
-                logger.info(f"Температура стола: {value}")
         elif line.startswith("WIFI:"):
-            value = line.split(":", 1)[1] if ":" in line else ""
-            publish("fbg5/wifi", value)
-            logger.info(f"Сигнал WiFi: {value}")
+            parts = line.split(":", 1)
+            if len(parts) > 1:
+                value = parts[1].strip()
+                logger.info(f"Извлечён сигнал WiFi: {value}")
+                publish("fbg5/wifi", value)
         elif line.startswith("M997"):
+            # Ожидаем: M997 IDLE или M997 PRINTING и т.д.
             parts = line.split()
-            value = parts[1] if len(parts) > 1 else "unknown"
-            publish("fbg5/status", value)
-            logger.info(f"Статус: {value}")
+            if len(parts) > 1:
+                value = parts[1]
+                logger.info(f"Извлечён статус: {value}")
+                publish("fbg5/status", value)
         elif line.startswith("M27"):
+            # Ожидаем: M27 45 (процент)
             parts = line.split()
-            value = parts[1] if len(parts) > 1 else "0"
-            publish("fbg5/progress", value)
-            logger.info(f"Прогресс: {value}")
+            if len(parts) > 1:
+                value = parts[1]
+                logger.info(f"Извлечён прогресс: {value}")
+                publish("fbg5/progress", value)
         elif line.startswith("M994"):
+            # Ожидаем: M994 filename.gcode; comment
             if " " in line:
                 data = line.split(" ", 1)[1]
                 if ";" in data:
-                    filename = data.split(";")[0]
+                    filename = data.split(";")[0].strip()
+                    logger.info(f"Извлечено имя файла: {filename}")
                     publish("fbg5/file", filename)
-                    logger.info(f"Файл: {filename}")
         elif line.startswith("M992"):
+            # Ожидаем: M992 3600 (секунды)
             parts = line.split()
-            value = parts[1] if len(parts) > 1 else "0"
-            publish("fbg5/time_left", value)
-            logger.info(f"Оставшееся время: {value}")
+            if len(parts) > 1:
+                value = parts[1]
+                logger.info(f"Извлечено оставшееся время: {value}")
+                publish("fbg5/time_left", value)
         else:
             logger.debug(f"Неизвестная команда: {line}")
     except Exception as e:
-        logger.error(f"Ошибка парсинга строки '{line}': {e}")
+        logger.error(f"Ошибка парсинга строки '{line}': {e}", exc_info=True)
 
 # Основной цикл
 logger.info("Запуск основного цикла")
@@ -207,7 +221,7 @@ while True:
         logger.debug(f"Отправлены команды: {commands.strip()}")
 
         msg = ws.recv()
-        logger.debug(f"Получен ответ:\n{msg}")
+        logger.info(f"Получен ответ от принтера (первые 200 символов): {msg[:200]}")
 
         for line in msg.split("\n"):
             line = line.strip()
