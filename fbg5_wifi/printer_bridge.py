@@ -29,38 +29,6 @@ logger.info(f"Запуск с параметрами: PRINTER_IP={PRINTER_IP}, W
             f"MQTT_HOST={MQTT_HOST}, MQTT_PORT={MQTT_PORT}, "
             f"MQTT_USER={'задан' if MQTT_USER else 'не задан'}, INTERVAL={INTERVAL}")
 
-# Колбэки MQTT (версия 2.0+)
-def on_connect(client, userdata, flags, reason_code, properties=None):
-    if reason_code == 0:
-        logger.info("MQTT брокер: подключено успешно")
-        discovery()
-    else:
-        logger.error(f"MQTT брокер: ошибка подключения, код {reason_code} - {mqtt.connack_string(reason_code)}")
-
-def on_disconnect(client, userdata, flags, reason_code, properties=None):
-    logger.warning(f"MQTT брокер: отключено, код {reason_code}. Попытка переподключения...")
-
-# Создание клиента MQTT
-try:
-    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    mqtt_client.on_connect = on_connect
-    mqtt_client.on_disconnect = on_disconnect
-    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=60)
-
-    if MQTT_USER and MQTT_PASSWORD:
-        mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
-        logger.info("Установлены учётные данные для MQTT")
-    else:
-        logger.info("Авторизация MQTT не требуется (логин/пароль не заданы)")
-
-    logger.info(f"Попытка подключения к MQTT брокеру {MQTT_HOST}:{MQTT_PORT}")
-    mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
-    mqtt_client.loop_start()
-    logger.info("MQTT клиент запущен, ожидание подключения...")
-except Exception as e:
-    logger.error(f"Ошибка создания MQTT клиента: {e}", exc_info=True)
-    sys.exit(1)
-
 # Устройство для Home Assistant
 device = {
     "identifiers": ["fbg5_printer"],
@@ -68,18 +36,13 @@ device = {
     "manufacturer": "Flying Bear"
 }
 
+# Функция публикации
 def publish(topic, value):
-    """Публикация в MQTT с проверкой соединения и логированием."""
-    # Проверяем, что value не пустое и не None
-    if value is None or value == "":
-        logger.warning(f"Попытка публикации пустого значения в {topic}, пропускаю")
-        return
-    # Проверяем состояние MQTT
+    """Публикация в MQTT с проверкой соединения."""
     if not mqtt_client.is_connected():
         logger.warning(f"MQTT не подключён, попытка переподключения перед публикацией {topic}")
-        # Даём время на переподключение (loop_start работает в фоне)
         time.sleep(0.5)
-    result = mqtt_client.publish(topic, str(value), retain=True)
+    result = mqtt_client.publish(topic, value, retain=True)
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
         logger.info(f"Опубликовано: {topic} = {value}")
     else:
@@ -133,6 +96,38 @@ def discovery():
     )
     logger.info("Отправлена discovery для connection")
 
+# Колбэки MQTT (версия 2.0+)
+def on_connect(client, userdata, flags, reason_code, properties=None):
+    if reason_code == 0:
+        logger.info("MQTT брокер: подключено успешно")
+        discovery()
+    else:
+        logger.error(f"MQTT брокер: ошибка подключения, код {reason_code} - {mqtt.connack_string(reason_code)}")
+
+def on_disconnect(client, userdata, flags, reason_code, properties=None):
+    logger.warning(f"MQTT брокер: отключено, код {reason_code}. Попытка переподключения...")
+
+# Создание клиента MQTT
+try:
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = on_disconnect
+    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=60)
+
+    if MQTT_USER and MQTT_PASSWORD:
+        mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+        logger.info("Установлены учётные данные для MQTT")
+    else:
+        logger.info("Авторизация MQTT не требуется (логин/пароль не заданы)")
+
+    logger.info(f"Попытка подключения к MQTT брокеру {MQTT_HOST}:{MQTT_PORT}")
+    mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
+    mqtt_client.loop_start()
+    logger.info("MQTT клиент запущен, ожидание подключения...")
+except Exception as e:
+    logger.error(f"Ошибка создания MQTT клиента: {e}", exc_info=True)
+    sys.exit(1)
+
 def printer_reachable():
     """Проверка доступности принтера по порту."""
     try:
@@ -144,60 +139,50 @@ def printer_reachable():
         return False
 
 def parse_line(line):
-    """Парсинг строки от принтера и публикация данных."""
+    """Парсинг строки от принтера и публикация."""
     logger.debug(f"Парсинг строки: {line}")
     try:
-        # Пример: T:23 B:21 / или T:23
         if line.startswith("T:"):
-            nozzle_match = re.search(r"T:(\d+)", line)
-            bed_match = re.search(r"B:(\d+)", line)
-            if nozzle_match:
-                value = nozzle_match.group(1)
-                logger.info(f"Извлечена температура сопла: {value}")
+            nozzle = re.search(r"T:(\d+)", line)
+            bed = re.search(r"B:(\d+)", line)
+            if nozzle:
+                value = nozzle.group(1)
                 publish("fbg5/nozzle_temp", value)
-            if bed_match:
-                value = bed_match.group(1)
-                logger.info(f"Извлечена температура стола: {value}")
+                logger.info(f"Температура сопла: {value}")
+            if bed:
+                value = bed.group(1)
                 publish("fbg5/bed_temp", value)
+                logger.info(f"Температура стола: {value}")
         elif line.startswith("WIFI:"):
-            parts = line.split(":", 1)
-            if len(parts) > 1:
-                value = parts[1].strip()
-                logger.info(f"Извлечён сигнал WiFi: {value}")
-                publish("fbg5/wifi", value)
+            value = line.split(":", 1)[1] if ":" in line else ""
+            publish("fbg5/wifi", value)
+            logger.info(f"Сигнал WiFi: {value}")
         elif line.startswith("M997"):
-            # Ожидаем: M997 IDLE или M997 PRINTING и т.д.
             parts = line.split()
-            if len(parts) > 1:
-                value = parts[1]
-                logger.info(f"Извлечён статус: {value}")
-                publish("fbg5/status", value)
+            value = parts[1] if len(parts) > 1 else "unknown"
+            publish("fbg5/status", value)
+            logger.info(f"Статус: {value}")
         elif line.startswith("M27"):
-            # Ожидаем: M27 45 (процент)
             parts = line.split()
-            if len(parts) > 1:
-                value = parts[1]
-                logger.info(f"Извлечён прогресс: {value}")
-                publish("fbg5/progress", value)
+            value = parts[1] if len(parts) > 1 else "0"
+            publish("fbg5/progress", value)
+            logger.info(f"Прогресс: {value}")
         elif line.startswith("M994"):
-            # Ожидаем: M994 filename.gcode; comment
             if " " in line:
                 data = line.split(" ", 1)[1]
                 if ";" in data:
-                    filename = data.split(";")[0].strip()
-                    logger.info(f"Извлечено имя файла: {filename}")
+                    filename = data.split(";")[0]
                     publish("fbg5/file", filename)
+                    logger.info(f"Файл: {filename}")
         elif line.startswith("M992"):
-            # Ожидаем: M992 3600 (секунды)
             parts = line.split()
-            if len(parts) > 1:
-                value = parts[1]
-                logger.info(f"Извлечено оставшееся время: {value}")
-                publish("fbg5/time_left", value)
+            value = parts[1] if len(parts) > 1 else "0"
+            publish("fbg5/time_left", value)
+            logger.info(f"Оставшееся время: {value}")
         else:
             logger.debug(f"Неизвестная команда: {line}")
     except Exception as e:
-        logger.error(f"Ошибка парсинга строки '{line}': {e}", exc_info=True)
+        logger.error(f"Ошибка парсинга строки '{line}': {e}")
 
 # Основной цикл
 logger.info("Запуск основного цикла")
@@ -221,7 +206,7 @@ while True:
         logger.debug(f"Отправлены команды: {commands.strip()}")
 
         msg = ws.recv()
-        logger.info(f"Получен ответ от принтера (первые 200 символов): {msg[:200]}")
+        logger.info(f"Получен ответ от принтера:\n{msg}")
 
         for line in msg.split("\n"):
             line = line.strip()
