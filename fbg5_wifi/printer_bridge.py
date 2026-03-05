@@ -217,20 +217,26 @@ while True:
         logger.info("Команды отправлены, ожидание ответа...")
 
         # Получение ответа
-        msg = ws.recv()
-        logger.info(f"ПОЛУЧЕН ОТВЕТ ОТ ПРИНТЕРА:\n{msg}")
+        responses = []
 
-        # Закрываем соединение
+        while True:
+            try:
+                msg = ws.recv()
+                logger.info(f"WS сообщение: {msg}")
+                responses.append(msg)
+            except websocket.WebSocketTimeoutException:
+                logger.info("Больше сообщений нет")
+                break
+
         ws.close()
-        logger.info("WebSocket соединение закрыто")
 
-        # Парсинг ответа
-        lines = msg.split("\n")
-        for line in lines:
-            line = line.strip()
-            if not line or line == "ok":
-                continue
-            parse_line(line)
+        for msg in responses:
+            lines = msg.split("\n")
+            for line in lines:
+                line = line.strip()
+                if not line or line == "ok":
+                    continue
+                parse_line(line)
 
     except websocket.WebSocketTimeoutException as e:
         logger.error(f"Таймаут WebSocket (нет ответа от принтера): {e}")
