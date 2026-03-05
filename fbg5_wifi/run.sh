@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/bin/bash
 
 export PRINTER_IP=$(jq -r '.printer_ip' /data/options.json)
 export WS_PORT=$(jq -r '.ws_port' /data/options.json)
