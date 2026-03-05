@@ -21,10 +21,13 @@ PRINTER_IP = os.getenv("PRINTER_IP")
 WS_PORT = int(os.getenv("WS_PORT"))
 MQTT_HOST = os.getenv("MQTT_HOST")
 MQTT_PORT = int(os.getenv("MQTT_PORT"))
+MQTT_USER = os.getenv("MQTT_USER", "")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 INTERVAL = int(os.getenv("INTERVAL"))
 
 logger.info(f"Запуск с параметрами: PRINTER_IP={PRINTER_IP}, WS_PORT={WS_PORT}, "
-            f"MQTT_HOST={MQTT_HOST}, MQTT_PORT={MQTT_PORT}, INTERVAL={INTERVAL}")
+            f"MQTT_HOST={MQTT_HOST}, MQTT_PORT={MQTT_PORT}, "
+            f"MQTT_USER={'задан' if MQTT_USER else 'не задан'}, INTERVAL={INTERVAL}")
 
 # Колбэки MQTT
 def on_connect(client, userdata, flags, reason_code, properties=None):
@@ -45,6 +48,13 @@ try:
     mqtt_client.on_disconnect = on_disconnect
     mqtt_client.reconnect_delay_set(min_delay=1, max_delay=60)
 
+    # Если заданы логин и пароль, устанавливаем их
+    if MQTT_USER and MQTT_PASSWORD:
+        mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+        logger.info("Установлены учётные данные для MQTT")
+    else:
+        logger.info("Авторизация MQTT не требуется (логин/пароль не заданы)")
+
     logger.info(f"Попытка подключения к MQTT брокеру {MQTT_HOST}:{MQTT_PORT}")
     mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
     mqtt_client.loop_start()
@@ -64,7 +74,6 @@ def publish(topic, value):
     """Публикация в MQTT с проверкой соединения."""
     if not mqtt_client.is_connected():
         logger.warning(f"MQTT не подключён, попытка переподключения перед публикацией {topic}")
-        # reconnect запускается автоматически, но подождём немного
         time.sleep(0.5)
     result = mqtt_client.publish(topic, value, retain=True)
     if result.rc == mqtt.MQTT_ERR_SUCCESS:

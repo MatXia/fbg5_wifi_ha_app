@@ -1,25 +1,27 @@
 {
-    "name": "FBG5 Wifi",
-    "version": "1.0",
-    "slug": "fbg5_wifi",
-    "description": "FBG5 Wifi WebSocket to MQTT",
-    "startup": "services",
-    "boot": "auto",
-    "arch": ["amd64", "aarch64", "armv7", "armhf", "i386"],
-  
-    "options": {
-      "printer_ip": "192.168.1.99",
-      "ws_port": 8081,
+  "name": "FBG5 Wifi",
+  "version": "1.0",
+  "slug": "fbg5_wifi",
+  "description": "FBG5 Wifi WebSocket to MQTT",
+  "startup": "services",
+  "boot": "auto",
+  "arch": ["amd64", "aarch64", "armv7", "armhf", "i386"],
+  "options": {
+      "printer_ip": "192.168.1.120",
+      "ws_port": 8080,
       "mqtt_host": "core-mosquitto",
       "mqtt_port": 1883,
+      "mqtt_user": "",
+      "mqtt_password": "",
       "interval": 60
-    },
-  
-    "schema": {
+  },
+  "schema": {
       "printer_ip": "str",
       "ws_port": "int",
       "mqtt_host": "str",
       "mqtt_port": "int",
+      "mqtt_user": "str",
+      "mqtt_password": "str",
       "interval": "int"
-    }
+  }
 }
