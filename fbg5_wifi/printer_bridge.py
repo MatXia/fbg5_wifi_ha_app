@@ -12,7 +12,7 @@ MQTT_HOST = os.getenv("MQTT_HOST")
 MQTT_PORT = int(os.getenv("MQTT_PORT"))
 INTERVAL = int(os.getenv("INTERVAL"))
 
-mqtt_client = mqtt.Client()
+mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
 
 device = {
