@@ -56,6 +56,9 @@ try:
     logger.info(f"Попытка подключения к MQTT брокеру {MQTT_HOST}:{MQTT_PORT}")
     mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
     mqtt_client.loop_start()
+    while not mqtt_client.is_connected():
+        logger.info("Ожидание подключения MQTT...")
+        time.sleep(1)
     logger.info("MQTT клиент запущен, ожидание подключения...")
 except Exception as e:
     logger.error(f"Ошибка создания MQTT клиента: {e}", exc_info=True)
@@ -69,15 +72,17 @@ device = {
 }
 
 def publish(topic, value):
-    """Публикация в MQTT с проверкой соединения."""
     if not mqtt_client.is_connected():
-        logger.warning(f"MQTT не подключён, попытка переподключения перед публикацией {topic}")
-        time.sleep(0.5)
+        logger.warning("MQTT не подключён")
+        return
+
     result = mqtt_client.publish(topic, value, retain=True)
+    result.wait_for_publish()
+
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
-        logger.info(f"Опубликовано: {topic} = {value}")
+        logger.info(f"MQTT -> {topic} = {value}")
     else:
-        logger.warning(f"Ошибка публикации в топик {topic}: {result.rc}")
+        logger.warning(f"Ошибка публикации {topic}: {result.rc}")
 
 def set_all_unavailable():
     """Установка всех сенсоров в 'unavailable'."""
@@ -104,7 +109,7 @@ def discovery():
             "unique_id": f"fbg5_{key}",
             "device": device
         }
-        mqtt_client.publish(
+        publish(
             f"homeassistant/sensor/fbg5/{key}/config",
             json.dumps(payload),
             retain=True
@@ -120,7 +125,7 @@ def discovery():
         "device_class": "connectivity",
         "device": device
     }
-    mqtt_client.publish(
+    publish(
         "homeassistant/binary_sensor/fbg5/connection/config",
         json.dumps(connection_payload),
         retain=True
