@@ -5,12 +5,11 @@
     "description": "FBG5 Wifi WebSocket to MQTT",
     "startup": "services",
     "boot": "auto",
-    "host_network": true,
     "arch": ["amd64", "aarch64", "armv7", "armhf", "i386"],
   
     "options": {
-      "printer_ip": "192.168.1.120",
-      "ws_port": 8080,
+      "printer_ip": "192.168.1.99",
+      "ws_port": 8081,
       "mqtt_host": "core-mosquitto",
       "mqtt_port": 1883,
       "interval": 60
