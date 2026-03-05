@@ -8,7 +8,7 @@ import paho.mqtt.client as mqtt
 import logging
 import sys
 
-# Настройка логирования
+# Настройка логирования (уровень INFO, чтобы видеть все важные шаги)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -29,6 +29,38 @@ logger.info(f"Запуск с параметрами: PRINTER_IP={PRINTER_IP}, W
             f"MQTT_HOST={MQTT_HOST}, MQTT_PORT={MQTT_PORT}, "
             f"MQTT_USER={'задан' if MQTT_USER else 'не задан'}, INTERVAL={INTERVAL}")
 
+# Колбэки MQTT
+def on_connect(client, userdata, flags, reason_code, properties=None):
+    if reason_code == 0:
+        logger.info("MQTT брокер: подключено успешно")
+        discovery()
+    else:
+        logger.error(f"MQTT брокер: ошибка подключения, код {reason_code} - {mqtt.connack_string(reason_code)}")
+
+def on_disconnect(client, userdata, flags, reason_code, properties=None):
+    logger.warning(f"MQTT брокер: отключено, код {reason_code}. Попытка переподключения...")
+
+# Создание клиента MQTT
+try:
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = on_disconnect
+    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=60)
+
+    if MQTT_USER and MQTT_PASSWORD:
+        mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+        logger.info("Установлены учётные данные для MQTT")
+    else:
+        logger.info("Авторизация MQTT не требуется (логин/пароль не заданы)")
+
+    logger.info(f"Попытка подключения к MQTT брокеру {MQTT_HOST}:{MQTT_PORT}")
+    mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
+    mqtt_client.loop_start()
+    logger.info("MQTT клиент запущен, ожидание подключения...")
+except Exception as e:
+    logger.error(f"Ошибка создания MQTT клиента: {e}", exc_info=True)
+    sys.exit(1)
+
 # Устройство для Home Assistant
 device = {
     "identifiers": ["fbg5_printer"],
@@ -36,7 +68,6 @@ device = {
     "manufacturer": "Flying Bear"
 }
 
-# Функция публикации
 def publish(topic, value):
     """Публикация в MQTT с проверкой соединения."""
     if not mqtt_client.is_connected():
@@ -96,38 +127,6 @@ def discovery():
     )
     logger.info("Отправлена discovery для connection")
 
-# Колбэки MQTT (версия 2.0+)
-def on_connect(client, userdata, flags, reason_code, properties=None):
-    if reason_code == 0:
-        logger.info("MQTT брокер: подключено успешно")
-        discovery()
-    else:
-        logger.error(f"MQTT брокер: ошибка подключения, код {reason_code} - {mqtt.connack_string(reason_code)}")
-
-def on_disconnect(client, userdata, flags, reason_code, properties=None):
-    logger.warning(f"MQTT брокер: отключено, код {reason_code}. Попытка переподключения...")
-
-# Создание клиента MQTT
-try:
-    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    mqtt_client.on_connect = on_connect
-    mqtt_client.on_disconnect = on_disconnect
-    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=60)
-
-    if MQTT_USER and MQTT_PASSWORD:
-        mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
-        logger.info("Установлены учётные данные для MQTT")
-    else:
-        logger.info("Авторизация MQTT не требуется (логин/пароль не заданы)")
-
-    logger.info(f"Попытка подключения к MQTT брокеру {MQTT_HOST}:{MQTT_PORT}")
-    mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
-    mqtt_client.loop_start()
-    logger.info("MQTT клиент запущен, ожидание подключения...")
-except Exception as e:
-    logger.error(f"Ошибка создания MQTT клиента: {e}", exc_info=True)
-    sys.exit(1)
-
 def printer_reachable():
     """Проверка доступности принтера по порту."""
     try:
@@ -148,77 +147,88 @@ def parse_line(line):
             if nozzle:
                 value = nozzle.group(1)
                 publish("fbg5/nozzle_temp", value)
-                logger.info(f"Температура сопла: {value}")
+                logger.info(f"Извлечена температура сопла: {value}")
             if bed:
                 value = bed.group(1)
                 publish("fbg5/bed_temp", value)
-                logger.info(f"Температура стола: {value}")
+                logger.info(f"Извлечена температура стола: {value}")
         elif line.startswith("WIFI:"):
             value = line.split(":", 1)[1] if ":" in line else ""
             publish("fbg5/wifi", value)
-            logger.info(f"Сигнал WiFi: {value}")
+            logger.info(f"Извлечён сигнал WiFi: {value}")
         elif line.startswith("M997"):
             parts = line.split()
             value = parts[1] if len(parts) > 1 else "unknown"
             publish("fbg5/status", value)
-            logger.info(f"Статус: {value}")
+            logger.info(f"Извлечён статус: {value}")
         elif line.startswith("M27"):
             parts = line.split()
             value = parts[1] if len(parts) > 1 else "0"
             publish("fbg5/progress", value)
-            logger.info(f"Прогресс: {value}")
+            logger.info(f"Извлечён прогресс: {value}")
         elif line.startswith("M994"):
             if " " in line:
                 data = line.split(" ", 1)[1]
                 if ";" in data:
                     filename = data.split(";")[0]
                     publish("fbg5/file", filename)
-                    logger.info(f"Файл: {filename}")
+                    logger.info(f"Извлечено имя файла: {filename}")
         elif line.startswith("M992"):
             parts = line.split()
             value = parts[1] if len(parts) > 1 else "0"
             publish("fbg5/time_left", value)
-            logger.info(f"Оставшееся время: {value}")
+            logger.info(f"Извлечено оставшееся время: {value}")
         else:
             logger.debug(f"Неизвестная команда: {line}")
     except Exception as e:
-        logger.error(f"Ошибка парсинга строки '{line}': {e}")
+        logger.error(f"Ошибка парсинга строки '{line}': {e}", exc_info=True)
 
 # Основной цикл
 logger.info("Запуск основного цикла")
 while True:
     try:
+        # Проверка доступности принтера
         if not printer_reachable():
-            logger.warning("Принтер недоступен")
+            logger.warning("Принтер недоступен по TCP")
             publish("fbg5/connection", "OFF")
             set_all_unavailable()
             time.sleep(INTERVAL)
             continue
 
         publish("fbg5/connection", "ON")
-        logger.info(f"Подключение к WebSocket: ws://{PRINTER_IP}:{WS_PORT}")
+        logger.info(f"Попытка подключения к WebSocket: ws://{PRINTER_IP}:{WS_PORT}")
 
+        # Создание WebSocket соединения с таймаутом
         ws = websocket.create_connection(f"ws://{PRINTER_IP}:{WS_PORT}", timeout=10)
-        logger.debug("WebSocket соединение установлено")
+        logger.info("WebSocket соединение установлено")
 
+        # Устанавливаем таймаут на чтение
+        ws.settimeout(10)
+
+        # Отправка команд
         commands = "M105\nM27\nM994\nM992\nM997\n"
+        logger.info(f"Отправка команд:\n{commands.strip()}")
         ws.send(commands)
-        logger.debug(f"Отправлены команды: {commands.strip()}")
+        logger.info("Команды отправлены, ожидание ответа...")
 
+        # Получение ответа
         msg = ws.recv()
-        logger.info(f"Получен ответ от принтера:\n{msg}")
+        logger.info(f"ПОЛУЧЕН ОТВЕТ ОТ ПРИНТЕРА:\n{msg}")
 
-        for line in msg.split("\n"):
+        # Закрываем соединение
+        ws.close()
+        logger.info("WebSocket соединение закрыто")
+
+        # Парсинг ответа
+        lines = msg.split("\n")
+        for line in lines:
             line = line.strip()
             if not line or line == "ok":
                 continue
             parse_line(line)
 
-        ws.close()
-        logger.debug("WebSocket соединение закрыто")
-
     except websocket.WebSocketTimeoutException as e:
-        logger.error(f"Таймаут WebSocket: {e}")
+        logger.error(f"Таймаут WebSocket (нет ответа от принтера): {e}")
         publish("fbg5/connection", "OFF")
         set_all_unavailable()
     except websocket.WebSocketException as e:
