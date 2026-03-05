@@ -10,13 +10,13 @@ import sys
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,  # Можно изменить на DEBUG для более детального вывода
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger("fbg5_bridge")
 
-# Чтение переменных окружения
+# Параметры из окружения
 PRINTER_IP = os.getenv("PRINTER_IP")
 WS_PORT = int(os.getenv("WS_PORT"))
 MQTT_HOST = os.getenv("MQTT_HOST")
@@ -26,18 +26,34 @@ INTERVAL = int(os.getenv("INTERVAL"))
 logger.info(f"Запуск с параметрами: PRINTER_IP={PRINTER_IP}, WS_PORT={WS_PORT}, "
             f"MQTT_HOST={MQTT_HOST}, MQTT_PORT={MQTT_PORT}, INTERVAL={INTERVAL}")
 
-# Настройка MQTT клиента
+# Колбэки MQTT
+def on_connect(client, userdata, flags, reason_code, properties=None):
+    if reason_code == 0:
+        logger.info("MQTT брокер: подключено успешно")
+        # Отправляем discovery при первом подключении
+        discovery()
+    else:
+        logger.error(f"MQTT брокер: ошибка подключения, код {reason_code} - {mqtt.connack_string(reason_code)}")
+
+def on_disconnect(client, userdata, reason_code, properties=None):
+    logger.warning(f"MQTT брокер: отключено, код {reason_code}. Попытка переподключения...")
+
+# Создание клиента MQTT
 try:
-    # Используем новое API, чтобы избежать DeprecationWarning
     mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    # Запускаем фоновый поток для поддержания соединения
-    mqtt_client.loop_start()
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = on_disconnect
+    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=60)
+
+    logger.info(f"Попытка подключения к MQTT брокеру {MQTT_HOST}:{MQTT_PORT}")
     mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
-    logger.info("MQTT клиент инициализирован и запущен")
+    mqtt_client.loop_start()
+    logger.info("MQTT клиент запущен, ожидание подключения...")
 except Exception as e:
-    logger.error(f"Ошибка подключения к MQTT брокеру: {e}")
+    logger.error(f"Ошибка создания MQTT клиента: {e}", exc_info=True)
     sys.exit(1)
 
+# Устройство для Home Assistant
 device = {
     "identifiers": ["fbg5_printer"],
     "name": "Flying Bear Ghost 5",
@@ -45,8 +61,11 @@ device = {
 }
 
 def publish(topic, value):
-    """Публикация значения в MQTT с логированием."""
-    logger.debug(f"Публикация: {topic} = {value}")
+    """Публикация в MQTT с проверкой соединения."""
+    if not mqtt_client.is_connected():
+        logger.warning(f"MQTT не подключён, попытка переподключения перед публикацией {topic}")
+        # reconnect запускается автоматически, но подождём немного
+        time.sleep(0.5)
     result = mqtt_client.publish(topic, value, retain=True)
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
         logger.debug(f"Успешно опубликовано: {topic} = {value}")
@@ -54,16 +73,8 @@ def publish(topic, value):
         logger.warning(f"Ошибка публикации в топик {topic}: {result.rc}")
 
 def set_all_unavailable():
-    """Установка всех сенсоров в состояние 'unavailable'."""
-    sensors = [
-        "status",
-        "nozzle_temp",
-        "bed_temp",
-        "wifi",
-        "progress",
-        "file",
-        "time_left"
-    ]
+    """Установка всех сенсоров в 'unavailable'."""
+    sensors = ["status", "nozzle_temp", "bed_temp", "wifi", "progress", "file", "time_left"]
     for s in sensors:
         publish(f"fbg5/{s}", "unavailable")
     logger.info("Все сенсоры переведены в unavailable")
@@ -110,7 +121,7 @@ def discovery():
     logger.info("Отправлена discovery для connection")
 
 def printer_reachable():
-    """Проверка доступности порта принтера."""
+    """Проверка доступности принтера по порту."""
     try:
         socket.create_connection((PRINTER_IP, WS_PORT), 3)
         logger.debug(f"Принтер доступен по {PRINTER_IP}:{WS_PORT}")
@@ -120,7 +131,7 @@ def printer_reachable():
         return False
 
 def parse_line(line):
-    """Парсинг строки от принтера и публикация данных."""
+    """Парсинг строки от принтера."""
     logger.debug(f"Парсинг строки: {line}")
     try:
         if line.startswith("T:"):
@@ -135,34 +146,35 @@ def parse_line(line):
                 publish("fbg5/bed_temp", value)
                 logger.info(f"Температура стола: {value}")
         elif line.startswith("WIFI:"):
-            value = line.split(":")[1]
+            value = line.split(":", 1)[1] if ":" in line else ""
             publish("fbg5/wifi", value)
             logger.info(f"Сигнал WiFi: {value}")
         elif line.startswith("M997"):
-            value = line.split(" ")[1] if len(line.split()) > 1 else "unknown"
+            parts = line.split()
+            value = parts[1] if len(parts) > 1 else "unknown"
             publish("fbg5/status", value)
             logger.info(f"Статус: {value}")
         elif line.startswith("M27"):
-            value = line.split(" ")[1] if len(line.split()) > 1 else "0"
+            parts = line.split()
+            value = parts[1] if len(parts) > 1 else "0"
             publish("fbg5/progress", value)
             logger.info(f"Прогресс: {value}")
         elif line.startswith("M994"):
-            data = line.split(" ", 1)[1] if " " in line else ""
-            if ";" in data:
-                filename = data.split(";")[0]
-                publish("fbg5/file", filename)
-                logger.info(f"Файл: {filename}")
+            if " " in line:
+                data = line.split(" ", 1)[1]
+                if ";" in data:
+                    filename = data.split(";")[0]
+                    publish("fbg5/file", filename)
+                    logger.info(f"Файл: {filename}")
         elif line.startswith("M992"):
-            value = line.split(" ")[1] if len(line.split()) > 1 else "0"
+            parts = line.split()
+            value = parts[1] if len(parts) > 1 else "0"
             publish("fbg5/time_left", value)
             logger.info(f"Оставшееся время: {value}")
         else:
             logger.debug(f"Неизвестная команда: {line}")
     except Exception as e:
-        logger.error(f"Ошибка при парсинге строки '{line}': {e}")
-
-# Отправка discovery при старте
-discovery()
+        logger.error(f"Ошибка парсинга строки '{line}': {e}")
 
 # Основной цикл
 logger.info("Запуск основного цикла")
@@ -181,17 +193,14 @@ while True:
         ws = websocket.create_connection(f"ws://{PRINTER_IP}:{WS_PORT}", timeout=10)
         logger.debug("WebSocket соединение установлено")
 
-        # Отправка команд
         commands = "M105\nM27\nM994\nM992\nM997\n"
         ws.send(commands)
         logger.debug(f"Отправлены команды: {commands.strip()}")
 
-        # Получение ответа
         msg = ws.recv()
         logger.debug(f"Получен ответ:\n{msg}")
 
-        lines = msg.split("\n")
-        for line in lines:
+        for line in msg.split("\n"):
             line = line.strip()
             if not line or line == "ok":
                 continue
