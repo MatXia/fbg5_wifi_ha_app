@@ -6,6 +6,7 @@
     "startup": "services",
     "boot": "auto",
     "host_network": true,
+    "arch": ["amd64", "aarch64", "armv7", "armhf", "i386"],
   
     "options": {
       "printer_ip": "192.168.1.120",
